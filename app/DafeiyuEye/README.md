@@ -78,7 +78,19 @@ TTS voice
 TTS style
 ```
 
-地址留空 = 系统 TTS；填了就走通用 HTTP 适配器。
+TTS 来源下拉可选：
+
+```text
+系统 TTS
+DeepSeek TTS
+第三方 HTTP TTS
+```
+
+- 系统 TTS：离线、即时
+- DeepSeek TTS：复用视觉 API Key，`stella` / `tide`，需要联网
+- 第三方 HTTP：自己填地址和 Key
+
+地址留空、没选第三方时自动回退系统 TTS。
 
 协议：
 
@@ -107,6 +119,8 @@ src/com/deepseek/dafeiyu/eye/TtsProvider.java
 接口只有 `speak / stop / shutdown`，由实现方负责排队，不打断上一句。
 
 完整说明见 [docs/TTS.md](../../docs/TTS.md)。
+
+DeepSeek TTS 的接口、OCR 选项和计费说明见 [docs/DS_API.md](../../docs/DS_API.md)。
 
 ## 输出
 

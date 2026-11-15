@@ -364,8 +364,85 @@ function ensureScreenCapture() {
     return captureReady;
 }
 
+function ocrMode() {
+    try {
+        var m = trimText(files.read(OCR_MODE_FILE)).toLowerCase();
+        if (m === "deepseek" || m === "ds") return "deepseek";
+    } catch (e) { }
+    return "local";
+}
+
+function deepSeekOcrImage(img) {
+    if (!apiKey) return [];
+    var path = "/sdcard/PhoneAgent/ds_ocr.jpg";
+    try {
+        images.save(img, path, "jpg", 90);
+        if (!files.exists(path)) return [];
+        var bytes = files.readBytes(path);
+        var boundary = "----dafeiyu" + Date.now();
+        var head = "--" + boundary + "\r\n" +
+            "Content-Disposition: form-data; name=\"purpose\"\r\n\r\n" +
+            "text_recognition\r\n" +
+            "--" + boundary + "\r\n" +
+            "Content-Disposition: form-data; name=\"file\"; filename=\"ocr.jpg\"\r\n" +
+            "Content-Type: image/jpeg\r\n\r\n";
+        var tail = "\r\n--" + boundary + "--\r\n";
+        var base = String(baseUrl || "https://api.deepseek.com").replace(/\/+$/, "");
+        var url = base + (base.indexOf("/v1") >= 0 ? "/tools/ocr" : "/v1/tools/ocr");
+        var conn = new java.net.URL(url).openConnection();
+        conn.setRequestMethod("POST");
+        conn.setDoOutput(true);
+        conn.setConnectTimeout(15000);
+        conn.setReadTimeout(90000);
+        conn.setRequestProperty("Authorization", "Bearer " + apiKey);
+        conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=" + boundary);
+        var out = conn.getOutputStream();
+        var baos = new java.io.ByteArrayOutputStream();
+        baos.write(new java.lang.String(head).getBytes("UTF-8"));
+        baos.write(bytes);
+        baos.write(new java.lang.String(tail).getBytes("UTF-8"));
+        out.write(baos.toByteArray());
+        out.close();
+        var code = conn.getResponseCode();
+        var stream = code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream();
+        if (!stream) return [];
+        var buf = new java.io.ByteArrayOutputStream();
+        var tmp = java.lang.reflect.Array.newInstance(java.lang.Byte.TYPE, 8192);
+        var n;
+        while ((n = stream.read(tmp)) > 0) buf.write(tmp, 0, n);
+        stream.close();
+        var text = new java.lang.String(buf.toByteArray(), "UTF-8");
+        if (code < 200 || code >= 300) {
+            addLog("DeepSeek OCR HTTP " + code + ": " + text.substring(0, 160));
+            return [];
+        }
+        var data = JSON.parse(text);
+        var lines = [];
+        var pages = data.pages || [];
+        for (var i = 0; i < pages.length; i++) {
+            var pt = String(pages[i].text || "");
+            var rows = pt.split("\n");
+            for (var j = 0; j < rows.length; j++) {
+                var s = trimText(rows[j]);
+                if (s) lines.push(s);
+            }
+        }
+        return lines;
+    } catch (e) {
+        addLog("DeepSeek OCR 失败: " + e);
+        return [];
+    } finally {
+        try { conn.disconnect(); } catch (e2) { }
+    }
+}
+
 function ocrImageText(img) {
     if (!img) return [];
+    if (ocrMode() === "deepseek") {
+        var ds = deepSeekOcrImage(img);
+        if (ds && ds.length) return ds;
+        addLog("DeepSeek OCR 无结果，回退本地 OCR");
+    }
     if (typeof paddle === "undefined") {
         addLog("当前 AutoX 没有 paddle OCR 模块");
         return [];
@@ -2865,6 +2942,19 @@ function handleRemoteText(text, channel, isGroup) {
         remotePublish("嗯，是本鱼在看，不是主人抢屏幕。");
         return;
     }
+    if (command.indexOf("/ocr") === 0) {
+        var om = trimText(command.replace("/ocr", ""));
+        if (om === "deepseek" || om === "ds") {
+            try { files.write(OCR_MODE_FILE, "deepseek"); } catch (eOcr1) { }
+            remotePublish("好，以后看图先用 DeepSeek OCR；失败会自动回退本地。");
+        } else if (om === "local" || om === "本地") {
+            try { files.write(OCR_MODE_FILE, "local"); } catch (eOcr2) { }
+            remotePublish("好，OCR 已切回本地 PaddleOCR。");
+        } else {
+            remotePublish("用法：/ocr deepseek 或 /ocr local");
+        }
+        return;
+    }
     if (command === "/stop" || command === "停止" || command === "停止任务") {
         if (biliRunning) {
             biliStop = true;
@@ -3432,6 +3522,9 @@ function finish(status, summary) {
         expandPanel();
     }
     completeTicket(status, summary);
+    try {
+        if ((currentPackage() || "") === "com.miui.securitycenter") home();
+    } catch (eHome) { }
     sleepAfterTask();
 }
 
@@ -3450,6 +3543,20 @@ function stopTask() {
     setTimeout(function () {
         if (running && stopRequested) finish("stopped", "已停止");
     }, 2500);
+}
+
+function escapeStuckSecurityCenter(taskText) {
+    try {
+        var pkg = safeCall(function () { return currentPackage() || ""; }, "");
+        if (!pkg || pkg.toLowerCase().indexOf("autojs") !== -1) pkg = lastForegroundPkg || pkg;
+        if (pkg !== "com.miui.securitycenter") return false;
+        if (/权限|授权|隐私|自启动|悬浮窗|安全设置|亲儿子/.test(String(taskText || ""))) return false;
+        addLog("界面卡在安全中心，先回桌面再继续任务");
+        home();
+        sleep(800);
+        lastForegroundPkg = "";
+        return true;
+    } catch (e) { return false; }
 }
 
 function runTask(task, autoRun) {
@@ -3486,6 +3593,7 @@ function runTask(task, autoRun) {
         configure();
         if (!apiKey) return;
     }
+    escapeStuckSecurityCenter(task);
     var netBlocked = networkGuard();
     if (netBlocked) {
         setStatus("无 Wi-Fi", "#F85149");
@@ -3963,6 +4071,7 @@ if (!apiKey) {
 // 线程池可能被 AutoX 提前收走，主线程循环最稳；它同时保活脚本。
 
 var VISION_EVENTS = "/sdcard/DeepSeekGirl/vision/observations.jsonl";
+var OCR_MODE_FILE = "/sdcard/PhoneAgent/ocr_mode.txt";
 var VISION_OFFSET_FILE = "/sdcard/PhoneAgent/vision_offset.txt";
 var VISION_LAST_FILE = "/sdcard/PhoneAgent/vision_last.txt";
 var VISION_LAST_KEY_FILE = "/sdcard/PhoneAgent/vision_last_key.txt";

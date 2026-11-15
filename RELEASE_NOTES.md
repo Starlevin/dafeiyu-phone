@@ -84,6 +84,15 @@
 - QQ 和 ntfy 的用户消息、助手回复都写入 `memory/chat/YYYY-MM-DD.jsonl`
 - QQ 主界面未读轮询、滚动到底部、读最新一条
 
+
+### 7. DeepSeek 集成 TTS / OCR
+
+- DafeiyuEye 的 TTS 来源新增 `DeepSeek TTS`
+- 复用视觉 API Key，调用 `/v1/tools/tts`，支持 `stella` / `tide`
+- agent 新增 `/ocr deepseek`、`/ocr local`
+- DeepSeek OCR 走 `/v1/tools/ocr`，失败自动回退 PaddleOCR
+- 坐标补节点仍用本地 PaddleOCR
+
 ## 已知限制
 
 - ASR 模型约 82MB，APK 约 94MB；首次使用需复制模型

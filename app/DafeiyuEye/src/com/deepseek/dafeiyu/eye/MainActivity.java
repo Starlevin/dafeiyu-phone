@@ -22,6 +22,8 @@ import android.view.TextureView;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.Spinner;
+import android.widget.ArrayAdapter;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -39,6 +41,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
     private EditText ttsKey;
     private EditText ttsVoice;
     private EditText ttsStyle;
+    private Spinner ttsMode;
     private EyeService service;
     private boolean bound;
     private Surface surface;
@@ -108,7 +111,15 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         ttsLabel.setTextSize(12);
         ttsLabel.setPadding(0, dp(14), 0, dp(2));
         root.addView(ttsLabel);
-        ttsUrl = field(root, "TTS 地址（POST 返回音频或 audio_url）", "", false);
+
+        ttsMode = new Spinner(this);
+        ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
+                new String[]{"系统 TTS", "DeepSeek TTS", "第三方 HTTP TTS"});
+        modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        ttsMode.setAdapter(modeAdapter);
+        root.addView(ttsMode);
+
+        ttsUrl = field(root, "第三方 TTS 地址（仅 HTTP 模式使用）", "", false);
         ttsKey = field(root, "TTS API Key（可留空）", "", true);
         ttsVoice = field(root, "TTS voice", "feiyu", false);
         ttsStyle = field(root, "TTS style（cute / gentle）", "cute", false);
@@ -117,7 +128,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         save.setText("保存 API 配置");
         save.setOnClickListener(v -> {
             EyeConfig.save(this, baseUrl.getText().toString(), apiKey.getText().toString(),
-                    model.getText().toString(), ttsUrl.getText().toString(),
+                    model.getText().toString(), ttsModeValue(), ttsUrl.getText().toString(),
                     ttsKey.getText().toString(), ttsVoice.getText().toString(),
                     ttsStyle.getText().toString());
             status.setText("已保存。重新打开镜头后生效。");
@@ -233,11 +244,25 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         try { stopService(new Intent(this, EyeService.class)); } catch (Throwable ignored) { }
     }
 
+    private String ttsModeValue() {
+        int p = ttsMode == null ? 0 : ttsMode.getSelectedItemPosition();
+        if (p == 1) return "deepseek";
+        if (p == 2) return "http";
+        return "system";
+    }
+
+    private int ttsModeIndex(String mode) {
+        if ("deepseek".equalsIgnoreCase(mode)) return 1;
+        if ("http".equalsIgnoreCase(mode)) return 2;
+        return 0;
+    }
+
     private void loadConfig() {
         EyeConfig c = EyeConfig.load(this);
         baseUrl.setText(c.baseUrl);
         apiKey.setText(c.apiKey);
         model.setText(c.model);
+        ttsMode.setSelection(ttsModeIndex(c.ttsMode));
         ttsUrl.setText(c.ttsUrl);
         ttsKey.setText(c.ttsKey);
         ttsVoice.setText(c.ttsVoice);

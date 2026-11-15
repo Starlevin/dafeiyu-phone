@@ -39,11 +39,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  * 同步代理，或另写 TtsProvider 实现。
  */
 public class HttpTtsProvider implements TtsProvider {
-    private final Context ctx;
-    private final String endpoint;
-    private final String key;
-    private final String voice;
-    private final String style;
+    protected final Context ctx;
+    protected final String endpoint;
+    protected final String key;
+    protected final String voice;
+    protected final String style;
     private final ExecutorService worker = Executors.newSingleThreadExecutor();
     private final AtomicInteger epoch = new AtomicInteger();
     private volatile MediaPlayer player;
@@ -75,13 +75,18 @@ public class HttpTtsProvider implements TtsProvider {
         });
     }
 
+    protected JSONObject buildBody(String text) throws Exception {
+        JSONObject body = new JSONObject();
+        body.put("text", text);
+        body.put("voice", voice);
+        body.put("style", style);
+        return body;
+    }
+
     private byte[] request(String text) throws Exception {
         HttpURLConnection conn = null;
         try {
-            JSONObject body = new JSONObject();
-            body.put("text", text);
-            body.put("voice", voice);
-            body.put("style", style);
+            JSONObject body = buildBody(text);
 
             conn = (HttpURLConnection) new URL(endpoint).openConnection();
             conn.setRequestMethod("POST");
