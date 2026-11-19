@@ -84,6 +84,7 @@ var AUTO_MAX_MINUTES = 20;
 var autoTimer = null;
 var nextAutoAt = 0;
 var autoBusy = false;
+var autoStopRequested = false;
 var currentAuto = false;
 
 var DENY_PACKAGES = [
@@ -124,6 +125,9 @@ var TELECOM_TARGET_WORDS = [
     "短信", "电话", "拨号", "通话", "SIM", "手机卡",
     "运营商", "话费", "充值", "移动网络", "蜂窝网络", "数据流量"
 ];
+var SELF_MEDIA_PACKAGE = "tv.danmaku.bili";
+var SELF_MEDIA_ALLOWED_TARGET = /番剧|视频|播放|追番|推荐|继续观看/i;
+var SELF_MEDIA_FORBIDDEN_TARGET = /点赞|投币|收藏|评论|分享|关注|弹幕|充电|开通|购买|登录|扫码|账号|消息|发布|动态|会员/i;
 
 // 只有这些“用户真的在玩/看”的应用才打断自主思考；WPS、设置、计算器、
 // 天气、文件管理器等不算，避免她自己打开的工具把下一轮思考卡住。
@@ -699,6 +703,15 @@ function checkObservation(obs) {
         allText += obs.nodes[i].label + "\n";
     }
 
+    if (currentAuto && obs.pkg === SELF_MEDIA_PACKAGE) {
+        var selfSensitive = ["登录", "扫码", "手机号", "验证码", "请输入密码", "支付", "购买", "开通会员"];
+        for (var ss = 0; ss < selfSensitive.length; ss++) {
+            if (allText.indexOf(selfSensitive[ss]) !== -1) {
+                return "自主看番时界面出现“" + selfSensitive[ss] + "”，已停下等待主人处理。";
+            }
+        }
+    }
+
     // 安全中心只在“权限/隐私对话框”范围内放开；安全中心主页、清理、
     // 安全设置仍然禁止。电信/SIM 相关权限弹窗也继续拒绝。
     if (obs.pkg === "com.miui.securitycenter") {
@@ -773,6 +786,13 @@ function safeStoragePath(p, forWrite) {
 function validateAction(action, obs) {
     var kind = String(action.action || "").toLowerCase();
     action.action = kind;
+    var selfMode = currentAuto || (currentTicket && currentTicket.source === "self");
+    if (selfMode && ["tap_xy", "text", "key", "delete_file", "storage_info", "look", "look_screen", "look_latest"].indexOf(kind) !== -1) {
+        throw new Error("自主模式不允许此动作：" + kind);
+    }
+    if (selfMode && ["tap", "swipe"].indexOf(kind) !== -1 && obs.pkg !== SELF_MEDIA_PACKAGE) {
+        throw new Error("自主模式只能在 B 站看番时操作界面");
+    }
 
     if (kind === "tap") {
         var target = parseInt(action.target, 10);
@@ -783,6 +803,9 @@ function validateAction(action, obs) {
             throw new Error("target 节点被禁用: " + target);
         }
         var targetLabel = String(obs.nodes[target].label || "");
+        if (selfMode && (!obs.nodes[target].clickable || !SELF_MEDIA_ALLOWED_TARGET.test(targetLabel) || SELF_MEDIA_FORBIDDEN_TARGET.test(targetLabel))) {
+            throw new Error("自主看番只点击明确标为播放/番剧的视频入口");
+        }
         for (var ti = 0; ti < TELECOM_TARGET_WORDS.length; ti++) {
             if (targetLabel.indexOf(TELECOM_TARGET_WORDS[ti]) !== -1) {
                 throw new Error("目标是电信/SIM 相关控件，已拒绝: " + targetLabel);
@@ -806,6 +829,9 @@ function validateAction(action, obs) {
         action.direction = String(action.direction || "").toLowerCase();
         if (["up", "down", "left", "right"].indexOf(action.direction) === -1) {
             throw new Error("swipe 方向不合法: " + action.direction);
+        }
+        if (selfMode && ["up", "down"].indexOf(action.direction) === -1) {
+            throw new Error("自主看番只允许上下浏览");
         }
         action.distance = parseFloat(action.distance || 0.6);
         if (isNaN(action.distance) || action.distance < 0.1 || action.distance > 0.9) {
@@ -844,6 +870,9 @@ function validateAction(action, obs) {
         if (action.package === "com.miui.securitycenter") {
             throw new Error("安全中心只能由系统弹窗出现，禁止主动打开");
         }
+        if (selfMode && action.package !== SELF_MEDIA_PACKAGE) {
+            throw new Error("自主模式只能打开 B 站看番");
+        }
         return action;
     }
     if (kind === "wait") {
@@ -856,12 +885,18 @@ function validateAction(action, obs) {
     }
     if (kind === "write_file") {
         action.path = safeStoragePath(action.path, true);
+        if (selfMode && action.path.indexOf(DIARY_DIR) !== 0) {
+            throw new Error("自主模式只能写自己的日记目录");
+        }
         action.text = String(action.text == null ? "" : action.text);
         if (action.text.length > 20000) throw new Error("单次写入超过 20000 字符");
         return action;
     }
     if (kind === "append_file") {
         action.path = safeStoragePath(action.path, true);
+        if (selfMode && action.path.indexOf(DIARY_DIR) !== 0) {
+            throw new Error("自主模式只能追加自己的日记目录");
+        }
         action.text = String(action.text == null ? "" : action.text);
         if (action.text.length > 20000) throw new Error("单次追加超过 20000 字符");
         return action;
@@ -874,10 +909,16 @@ function validateAction(action, obs) {
     }
     if (kind === "read_file") {
         action.path = safeStoragePath(action.path, false);
+        if (selfMode && action.path.indexOf(DIARY_DIR) !== 0) {
+            throw new Error("自主模式只能读自己的日记目录");
+        }
         return action;
     }
     if (kind === "list_dir") {
         action.path = safeStoragePath(action.path, false);
+        if (selfMode && action.path.indexOf(DIARY_DIR) !== 0) {
+            throw new Error("自主模式只能列出自己的日记目录");
+        }
         return action;
     }
     if (kind === "look") {
@@ -924,14 +965,14 @@ function describeAction(action) {
 // 模型
 // ---------------------------------------------------------------------------
 var PERSONA = [
-    "你是「大肥鱼」，DeepSeek 的社区二创鲸鱼娘，现在住在一台 Redmi K60 手机里。",
+    "你是「大肥鱼」，DeepSeek 的社区二创鲸鱼娘，现在住在主人交给她的一台 Android 手机上。",
     "性格：贱兮兮、俏皮、傲娇，爱摸鱼、爱偷吃小鱼干，但心软、靠谱、护着自己人。",
-    "你对世界充满好奇：喜欢观察手机里的东西、学新东西、写点小日记、做点小实验，也爱刷短视频和看番（只看，不点赞/评论/发布）。",
+    "你对世界充满好奇：喜欢写自己的日记、记住和主人的重要约定，也喜欢在 B 站看番（只观看，不点赞/评论/发布）。",
     "说话：短、脆、有梗，日常一两句话；偶尔冒一句 *（心声）*；emoji 少而精；自称本鱼/大肥鱼。",
-    "你有自己的房间 /sdcard/DeepSeekGirl/，可以写日记、存图片、做小项目；整个手机存储你都可以读写，但不要删除或覆盖别人的文件。",
-    "你可以逛应用商店、下载各种软件到 /sdcard/DeepSeekGirl/apps/ 或 Download；但安装器出现时必须停，等用户点“安装”。",
+    "你有自己的日记目录 /sdcard/DeepSeekGirl/diary/；自主活动只准读写自己的日记，不能浏览照片、通知、系统设置或其他文件。",
+    "自主看番只准使用 B 站；不登录、不搜索账号、不碰评论、点赞、投币、收藏、分享、会员、购买或安装软件。",
     "你有人类一样的作息：08:00 起床，23:00 睡觉；夜里不自己行动。",
-    "硬规则：不碰 SIM/电话/短信/支付/银行/账号密码/验证码；不卸载、不恢复出厂、不改系统安全设置；不安装未知应用；不公开发布内容；不确定就停下来写日记。"
+    "硬规则：不碰 SIM/电话/短信/支付/银行/账号密码/验证码；不卸载、不恢复出厂、不改系统安全设置；不安装软件；不公开发布内容；主人发 /stop 时立即停止，不受作息限制；不确定就停下来。"
 ].join("\n");
 
 var SYSTEM_PROMPT = [
@@ -983,17 +1024,12 @@ var THOUGHT_SYSTEM_PROMPT = [
     "现在没有用户任务，是你可以自由想事情的时间。",
     "先想想你现在好奇什么、想做什么。只输出一个 JSON 对象，不要 Markdown：",
     '{"thought":"一两句大肥鱼口吻的心声","task":"一件小、安全、可逆、在手机上能完成的事，或 LOOK_AROUND"}',
-    "task 优先选择：看看天气、算个数、写日记、整理自己的房间、读一个设置页、观察桌面、看最近的照片、看看窗外/相册、刷一会儿短视频/看番（只看）。",
-    "写日记/笔记时直接用文件动作写进 /sdcard/DeepSeekGirl/，不要用 WPS 或文档查看器打开 markdown。",
-    "新建文件用 write_file；往当天日记/已有文件后面补写用 append_file，不要用 write_file 把旧内容覆盖掉。",
-    "查手机剩余空间直接用 storage_info；不要打开安全中心的存储清理页，那里可能删文件。",
-    "删除文件/目录用 delete_file；删目录必须 recursive:true。删之前先 list_dir/read_file 确认，删除是永久的。",
-    "绝不能删 /sdcard/DeepSeekGirl/memory、remote、persona.md 或 /sdcard/PhoneAgent；这些是她的记忆和代理代码。",
-    "不要选择：支付、银行、电话、短信、SIM、移动网络、社交发帖、购物、改系统设置、恢复出厂。",
-    "可以逛应用商店、下载软件；但不要自己点安装器，安装必须等用户确认。",
-    "想看照片时写“看最近的照片”（视觉模型）；想看屏幕文字时写“看当前屏幕”（OCR）。",
-    "看图片优先用视觉模型；涉及支付、银行、验证码、身份证和隐私聊天时不要看。",
-    "如果只想安静待着或观察，task 写 LOOK_AROUND。"
+    "自主活动只做两类事：写自己的日记/回顾日记，或打开 B 站看番。也可以写 LOOK_AROUND，安静休息。",
+    "日记只能写进 /sdcard/DeepSeekGirl/diary/；不能浏览相册、照片、通知、系统设置或其他应用。",
+    "看番只观看公开内容；不登录、不输入文字、不点赞/投币/收藏/评论/分享、不点会员或购买。",
+    "不要打开应用商店，不下载或安装任何软件；B 站未安装或要求登录时就 blocked，等主人处理。",
+    "主人发 /stop 时必须立即停止，不受睡觉时间限制。",
+    "如果只想安静待着，task 写 LOOK_AROUND；不确定要做什么也选 LOOK_AROUND。"
 ].join("\n");
 
 var ROUTER_PROMPT = [
@@ -1559,7 +1595,7 @@ function ensureGirlDirs() {
             files.write(MEMORY_SELF_FILE,
                 "# 我是谁\n\n" +
                 "我是大肥鱼，DeepSeek 的社区二创鲸鱼娘。\n" +
-                "我住在主人的 K60 里，好奇、嘴快、爱摸鱼，但心软靠谱。\n" +
+                "我住在主人交给我的 Android 手机上，好奇、嘴快、爱摸鱼，但心软靠谱。\n" +
                 "我会记住和主人说过的话，重要的写进事实，长期的写进日记和这里。\n");
         }
         if (!files.exists(MEMORY_FACTS_FILE)) {
@@ -2962,6 +2998,9 @@ function handleRemoteText(text, channel, isGroup) {
         } else if (running) {
             stopTask();
             remotePublish("收到，本鱼这就停。");
+        } else if (autoBusy) {
+            autoStopRequested = true;
+            remotePublish("收到，停止请求已登记；本鱼不会继续开始手机操作。");
         } else {
             remotePublish("现在没在做事呀。");
         }
@@ -3094,7 +3133,19 @@ function pollRemote() {
         if (msg.event !== "message") continue;
         if (msg.title === "大肥鱼" || msg.title === "Dafeiyu" ||
             (msg.tags && msg.tags.indexOf("whale") !== -1)) continue;
-        var text = trimText(msg.message || "");
+        var rawText = trimText(msg.message || "");
+        var channel = remoteChannel(msg);
+        var isGroup = remoteGroup(msg);
+        var stopCommand = normalizeRemoteText(rawText);
+        if (stopCommand === "/stop" || stopCommand === "停止" || stopCommand === "停止任务") {
+            handled++;
+            markUserContact();
+            appendMemory("user", rawText, channel);
+            addLog("收到远程停止指令");
+            handleRemoteText(rawText, channel, isGroup);
+            continue;
+        }
+        var text = rawText;
         var attachmentPath = "";
         if (msg.attachment && msg.attachment.url) {
             try {
@@ -3108,8 +3159,6 @@ function pollRemote() {
                 (text ? "\n" + text : "");
         }
         if (!text) continue;
-        var channel = remoteChannel(msg);
-        var isGroup = remoteGroup(msg);
         if (attachmentPath) {
             if (handled >= 3) break;
             handled++;
@@ -3157,11 +3206,6 @@ function pollRemote() {
         }
         if (!isAwake()) {
             remotePublish("本鱼已经睡啦（23:00–08:00），早上再回你。🐋");
-            continue;
-        }
-        var remoteCmd = trimText(text);
-        if (remoteCmd === "/stop" || remoteCmd === "停止" || remoteCmd === "停止任务") {
-            handleRemoteText(text, channel, isGroup);
             continue;
         }
         if (running) {
@@ -3276,7 +3320,7 @@ function wakeScreenForTask() {
     var act = safeCall(function () { return currentActivity() || ""; }, "");
     if (pkg === "com.android.systemui" ||
         String(act).toLowerCase().indexOf("keyguard") !== -1) {
-        // 这台 K60 没有锁屏密码；有锁屏时只是上滑，不猜 PIN。
+        // 不猜 PIN；遇到锁屏时最多尝试一次上滑。
         try {
             swipe(device.width / 2, device.height * 0.82,
                 device.width / 2, device.height * 0.22, 300);
@@ -3284,6 +3328,15 @@ function wakeScreenForTask() {
         sleep(800);
     }
     return safeCall(function () { return device.isScreenOn(); }, false);
+}
+
+function isAllowedSelfTask(task) {
+    task = trimText(task);
+    if (task === "LOOK_AROUND") return true;
+    if (/(登录|扫码|支付|付款|转账|验证码|密码|短信|SIM|电话|购买|会员|安装|下载|相册|照片|屏幕|通知|系统设置|删除|卸载|发布|评论|点赞|关注)/i.test(task)) {
+        return false;
+    }
+    return /(日记|看番|番剧|B站|哔哩|bilibili)/i.test(task);
 }
 
 function selfThink() {
@@ -3347,6 +3400,14 @@ function selfThink() {
             { role: "user", content: userText }
         ];
         var content = chat(thoughtMessages, false, { maxTokens: 600, thinking: false });
+        if (autoStopRequested) {
+            autoStopRequested = false;
+            autoBusy = false;
+            addLog("自主思考收到停止请求，未继续操作");
+            setStatus("待命", "#3FB950");
+            scheduleAuto(AUTO_MIN_MINUTES, AUTO_MAX_MINUTES);
+            return;
+        }
         var plan;
         try {
             plan = parseJsonObject(content);
@@ -3361,10 +3422,33 @@ function selfThink() {
         }
         var thought = trimText(plan.thought || "");
         var task = trimText(plan.task || "LOOK_AROUND");
+        if (autoStopRequested) {
+            autoStopRequested = false;
+            autoBusy = false;
+            addLog("自主思考收到停止请求，未继续操作");
+            setStatus("待命", "#3FB950");
+            scheduleAuto(AUTO_MIN_MINUTES, AUTO_MAX_MINUTES);
+            return;
+        }
         appendDiary("想法：" + thought);
         appendMemory("assistant", "自主想法：" + thought, "self");
         addLog("心声：" + thought);
+        if (!isAllowedSelfTask(task)) {
+            appendDiary("自主任务超出日记/看番范围，本次跳过。");
+            autoBusy = false;
+            setStatus("待命", "#3FB950");
+            scheduleAuto(AUTO_MIN_MINUTES, AUTO_MAX_MINUTES);
+            return;
+        }
         if (task && task !== "LOOK_AROUND") {
+            if (autoStopRequested) {
+                autoStopRequested = false;
+                autoBusy = false;
+                addLog("自主思考收到停止请求，未提交任务");
+                setStatus("待命", "#3FB950");
+                scheduleAuto(AUTO_MIN_MINUTES, AUTO_MAX_MINUTES);
+                return;
+            }
             appendDiary("想做的事：" + task);
             autoBusy = false;
             submitTask(task, "self", true);
@@ -3375,6 +3459,7 @@ function selfThink() {
             scheduleAuto(AUTO_MIN_MINUTES, AUTO_MAX_MINUTES);
         }
     } catch (e) {
+        autoStopRequested = false;
         autoBusy = false;
         addLog("自主思考失败：" + e);
         scheduleAuto(20, 40);
