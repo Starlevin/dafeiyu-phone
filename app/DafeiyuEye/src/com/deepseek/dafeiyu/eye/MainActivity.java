@@ -114,7 +114,7 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
 
         ttsMode = new Spinner(this);
         ArrayAdapter<String> modeAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item,
-                new String[]{"系统 TTS", "DeepSeek TTS", "第三方 HTTP TTS"});
+                new String[]{"内置离线 TTS", "DeepSeek TTS", "第三方 HTTP TTS"});
         modeAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         ttsMode.setAdapter(modeAdapter);
         root.addView(ttsMode);
@@ -174,7 +174,10 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         listen.setOnClickListener(v -> {
             String sample = "你好，我是大肥鱼，正在参观你的世界。";
             if (service != null) service.speakNow(sample);
-            else if (speaker != null) speaker.speak(sample);
+            else {
+                if (speaker == null) speaker = new Speaker(this);
+                speaker.speak(sample);
+            }
             status.setText("正在试听语音…");
         });
         root.addView(listen);
@@ -197,7 +200,6 @@ public class MainActivity extends Activity implements TextureView.SurfaceTexture
         root.addView(hint);
 
         setContentView(scroll);
-        speaker = new Speaker(this);
         asr = new AsrEngine(this);
         voice = new VoiceChat(this, new VoiceChat.Listener() {
             @Override public void onText(String text) {

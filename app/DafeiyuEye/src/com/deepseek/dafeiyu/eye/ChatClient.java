@@ -25,8 +25,8 @@ public class ChatClient {
         if (cfg == null || !cfg.hasVision()) return;
         HttpURLConnection conn = null;
         try {
-            String base = cfg.baseUrl;
-            if (base.endsWith("/v1")) base = base.substring(0, base.length() - 3);
+            String base = cfg.baseUrl == null ? "" : cfg.baseUrl.trim().replaceAll("/+$", "");
+            if (!base.endsWith("/v1")) base = base + "/v1";
             URL url = new URL(base + "/chat/completions");
             conn = (HttpURLConnection) url.openConnection();
             conn.setRequestMethod("POST");
@@ -48,8 +48,11 @@ public class ChatClient {
             payload.put("model", cfg.model);
             payload.put("messages", messages);
             payload.put("temperature", 0.75);
-            payload.put("max_tokens", 60);
+            payload.put("max_tokens", 120);
             payload.put("stream", false);
+            if (cfg.model != null && cfg.model.toLowerCase().contains("glm-5")) {
+                payload.put("reasoning_effort", "minimal");
+            }
             if (base.contains("deepseek") || cfg.model.contains("deepseek")) {
                 payload.put("thinking", new JSONObject().put("type", "disabled"));
             }

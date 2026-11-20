@@ -29,8 +29,12 @@ if (-not (Test-Path $aarDir)) {
 }
 Copy-Item (Join-Path $aarDir "classes.jar") (Join-Path $libs "sherpa-onnx-classes.jar") -Force
 Copy-Item $kotlin (Join-Path $libs "kotlin-stdlib.jar") -Force
-New-Item -ItemType Directory -Force -Path (Join-Path $libs "arm64-v8a") | Out-Null
-Copy-Item (Join-Path $aarDir "jni\arm64-v8a\*.so") (Join-Path $libs "arm64-v8a") -Force
+foreach ($abi in @("arm64-v8a", "armeabi-v7a")) {
+    $abiDir = Join-Path $aarDir "jni\$abi"
+    if (-not (Test-Path $abiDir)) { continue }
+    New-Item -ItemType Directory -Force -Path (Join-Path $libs $abi) | Out-Null
+    Copy-Item (Join-Path $abiDir "*.so") (Join-Path $libs $abi) -Force
+}
 
 $modelDir = Join-Path $cache "model"
 if (-not (Test-Path $modelDir)) {

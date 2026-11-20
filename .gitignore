@@ -16,3 +16,10 @@ Thumbs.db
 
 # Build output under app
 app/DafeiyuChat/dist/
+app/DafeiyuEye/build/
+app/DafeiyuEye/dist/
+app/DafeiyuEye/libs/
+app/DafeiyuEye/debug.keystore
+app/DafeiyuEye/res/raw/
+.eye-deps/
+_device/

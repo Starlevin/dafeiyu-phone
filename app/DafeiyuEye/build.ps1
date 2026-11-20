@@ -1,5 +1,24 @@
 ﻿$ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
+
+# aapt2 fails on Windows if the path contains non-ASCII characters (e.g. Chinese directory names).
+# If non-ASCII characters are present, temporarily mount a virtual drive letter via subst.
+if ($root -match "[^\x00-\x7F]" -and -not $env:DAFEIYU_SUBST_WRAPPED) {
+    $parentRepo = Split-Path -Parent (Split-Path -Parent $root)
+    $availLetters = [char[]]([int][char]'G'..[int][char]'Z') | Where-Object { -not (Test-Path "$($_):") }
+    if ($availLetters.Count -gt 0) {
+        $driveLetter = "$($availLetters[-1]):"
+        & subst $driveLetter $parentRepo | Out-Null
+        try {
+            $env:DAFEIYU_SUBST_WRAPPED = "1"
+            & powershell -ExecutionPolicy Bypass -File "$driveLetter\app\DafeiyuEye\build.ps1"
+            return
+        } finally {
+            $env:DAFEIYU_SUBST_WRAPPED = $null
+            & subst $driveLetter /D 2>$null | Out-Null
+        }
+    }
+}
 $sdk = Join-Path $env:LOCALAPPDATA "Android\Sdk"
 $bt = Join-Path $sdk "build-tools\34.0.0"
 $androidJar = Join-Path $sdk "platforms\android-34\android.jar"
@@ -7,7 +26,11 @@ $aapt2 = Join-Path $bt "aapt2.exe"
 $zipalign = Join-Path $bt "zipalign.exe"
 $apksigner = Join-Path $bt "apksigner.bat"
 $d8 = Join-Path $bt "d8.bat"
-$jdk = Join-Path $env:ProgramFiles "Java\jdk-17"
+$jdk = if ($env:JAVA_HOME -and (Test-Path (Join-Path $env:JAVA_HOME "bin\javac.exe"))) {
+    $env:JAVA_HOME.TrimEnd('\')
+} else {
+    Join-Path $env:ProgramFiles "Java\jdk-17"
+}
 $javac = Join-Path $jdk "bin\javac.exe"
 $jarExe = Join-Path $jdk "bin\jar.exe"
 $keytool = Join-Path $jdk "bin\keytool.exe"
@@ -57,8 +80,12 @@ Write-Host "[5/7] add classes.dex"
 
 Write-Host "[5b/7] add native ASR libs"
 $libStage = Join-Path $build "nativelib"
-New-Item -ItemType Directory -Force -Path (Join-Path $libStage "lib\arm64-v8a") | Out-Null
-Copy-Item (Join-Path $root "libs\arm64-v8a\*.so") (Join-Path $libStage "lib\arm64-v8a") -Force
+foreach ($abi in @("arm64-v8a", "armeabi-v7a")) {
+    $abiSrc = Join-Path $root "libs\$abi"
+    if (-not (Test-Path $abiSrc)) { continue }
+    New-Item -ItemType Directory -Force -Path (Join-Path $libStage "lib\$abi") | Out-Null
+    Copy-Item (Join-Path $abiSrc "*.so") (Join-Path $libStage "lib\$abi") -Force
+}
 & $jarExe uf (Join-Path $build "app-unsigned.apk") -C $libStage lib
 
 Write-Host "[6/7] zipalign"
